@@ -1,7 +1,5 @@
 # Image → MIDI
 
-Aplica OCR a uma imagem e converte a posição do texto extraído numa experiência lúdica em formato *Piano Roll* utilizando áudio gerado pelo Browser (WebAudio API).
-
 ### Requisitos
 - **Python 3**
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) instalado no sistema (dependência obrigatória para a análise de imagem).
