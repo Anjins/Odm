@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#ffffff;--fg:#000000;--muted:#666666;--border:#eeeeee;--surface:#f9f9f9}
+body{background:var(--bg);color:var(--fg);font-family:sans-serif;font-size:13px;min-height:100vh}
+header{border-bottom:0.5px solid var(--border);padding:0.75rem 1.5rem;display:flex;align-items:baseline;gap:1rem}
+header h1{font-size:14px;font-weight:500}
+header p{font-size:12px;color:var(--muted)}
+main{display:grid;grid-template-columns:1fr 300px;min-height:calc(100vh - 44px)}
+.left{border-right:0.5px solid var(--border);display:flex;flex-direction:column}
+.upload-zone{border:1px dashed var(--border);margin:1.25rem;min-height:220px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:var(--surface);position:relative;overflow:hidden}
+.upload-zone img{max-width:100%;max-height:320px;display:none;object-fit:contain}
+.upload-zone.has-image img{display:block}
+canvas.overlay{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none}
+.btn-analyze{font-size:12px;font-weight:600;background:var(--fg);color:var(--bg);border:none;cursor:pointer;padding:0.75rem 1rem;margin:0 1.25rem 1rem;display:flex;align-items:center;gap:0.5rem;justify-content:center}
+.btn-analyze:disabled{opacity:0.3;cursor:default}
+.spinner{width:11px;height:11px;border:2px solid transparent;border-top-color:var(--bg);border-radius:50%;animation:spin 0.8s linear infinite;display:none}
+.loading .spinner{display:block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tags{padding:0.5rem 1.25rem;display:flex;flex-wrap:wrap;gap:0.3rem;max-height:60px;overflow-y:auto;border-top:0.5px solid var(--border)}
+.tag{font-size:10px;background:var(--surface);padding:2px 6px;border:0.5px solid var(--border);font-family:monospace}
+.roll-section{border-top:0.5px solid var(--border);padding:1rem 1.25rem;flex:1}
+.roll-section h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px}
+.roll-wrap{background:var(--surface);border:0.5px solid var(--border)}
+canvas#roll{width:100%;display:block}
+.btn-export{width:100%;background:var(--bg);border:0.5px solid var(--border);padding:0.55rem;font-size:11px;font-weight:500;cursor:pointer;margin-top:8px;color:var(--fg)}
+.right{background:var(--surface);padding:1.25rem;display:flex;flex-direction:column;gap:1rem;overflow-y:auto}
+.section h4{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:0.7rem;border-bottom:0.5px solid var(--border);padding-bottom:3px}
+.cg{margin-bottom:0.7rem}
+.cg label{display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;color:var(--muted)}
+.cg label span{font-weight:500;color:var(--fg)}
+.playback{display:flex;gap:0.4rem;margin-top:0.4rem}
+.btn-play{background:var(--fg);color:var(--bg);flex:1;padding:0.65rem;cursor:pointer;border:none;font-weight:500;font-size:12px}
+.btn-play:disabled{opacity:0.3;cursor:default}
+.btn-stop{background:var(--bg);border:0.5px solid var(--border);flex:1;cursor:pointer;font-size:12px;color:var(--fg)}
+#log{flex:1;min-height:80px;background:#000;border:0.5px solid var(--border);font-size:10px;font-family:monospace;padding:0.5rem;overflow-y:auto;color:#0f0}
+.progress-bar{height:3px;background:var(--surface);border:0.5px solid var(--border);margin:0 1.25rem 0.5rem}
+.progress-fill{height:100%;background:var(--fg);width:0%;transition:width 0.4s}
+select{width:100%;padding:0.35rem;border:0.5px solid var(--border);background:var(--bg);color:var(--fg);font-size:12px}
+input[type=range]{width:100%}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Image → MIDI</h1>
+  <p>Flask + PyTesseract · Server-side OCR</p>
+</header>
+
+<main>
+  <div class="left">
+    <div class="upload-zone" id="uploadZone">
+      <div id="prompt">Drop image or click to browse</div>
+      <img id="previewImg" alt="preview">
+      <canvas id="overlayCanvas" class="overlay"></canvas>
+    </div>
+    <input type="file" id="fileInput" style="display:none" accept="image/*">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+
+    <button class="btn-analyze" id="analyzeBtn" disabled>
+      <div class="spinner"></div>
+      <span id="analyzeTxt">Send to Python OCR</span>
+    </button>
+
+    <div class="tags" id="tagsGrid"></div>
+
+    <div class="roll-section">
+      <h4>Composition</h4>
+      <div class="roll-wrap" id="rollContainer"><canvas id="roll"></canvas></div>
+      <button class="btn-export" id="exportBtn" disabled>Export PNG</button>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="section">
+      <h4>Display</h4>
+      <div class="cg">
+        <label>Height <span id="val-h">200</span>px</label>
+        <input type="range" id="compHeight" min="150" max="800" value="200" step="1">
+      </div>
+      <div class="cg">
+        <label>Bar thickness <span id="val-t">6</span>px</label>
+        <input type="range" id="thickRange" min="1" max="60" value="6" step="1">
+      </div>
+    </div>
+    <div class="section">
+      <h4>Tuning</h4>
+      <div class="cg">
+        <label>Root note</label>
+        <select id="rootSelect">
+          <option value="0">C</option>
+          <option value="2">D</option>
+          <option value="4">E</option>
+          <option value="5" selected>F</option>
+          <option value="7">G</option>
+          <option value="9">A</option>
+          <option value="11">B</option>
+        </select>
+      </div>
+      <div class="cg">
+        <label>Scale</label>
+        <select id="scaleSelect">
+          <option value="major">Major</option>
+          <option value="minor" selected>Natural minor</option>
+          <option value="pentatonic">Pentatonic</option>
+          <option value="chromatic">Chromatic</option>
+        </select>
+      </div>
+      <div class="cg">
+        <label>Waveform</label>
+        <select id="waveSelect">
+          <option value="sine">Sine</option>
+          <option value="triangle" selected>Triangle</option>
+          <option value="square">Square</option>
+          <option value="sawtooth">Sawtooth</option>
+        </select>
+      </div>
+    </div>
+    <div class="section">
+      <h4>Transport</h4>
+      <div class="playback">
+        <button class="btn-play" id="playBtn" disabled>▶ Play</button>
+        <button class="btn-stop" id="stopBtn">■ Stop</button>
+      </div>
+    </div>
+    <div id="log">Console: waiting for image...</div>
+  </div>
+</main>
+
+<script>
+const SCALES = {
+  major:      [0,2,4,5,7,9,11],
+  minor:      [0,2,3,5,7,8,10],
+  pentatonic: [0,2,4,7,9],
+  chromatic:  [0,1,2,3,4,5,6,7,8,9,10,11]
+};
+
+let words=[], notes=[], nodes=[], actx=null;
+
+const $=id=>document.getElementById(id);
+
+const log=(m,t='')=>{
+  const d=document.createElement('div');
+  d.textContent='> '+m;
+  if(t==='err')d.style.color='#f55';
+  if(t==='ok')d.style.color='#5f5';
+  const b=$('log'); b.appendChild(d); b.scrollTop=b.scrollHeight;
+};
+
+$('uploadZone').onclick=()=>$('fileInput').click();
+
+$('fileInput').onchange=e=>{
+  const f=e.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=ev=>{
+    const img=$('previewImg');
+    img.onload=()=>{
+      $('uploadZone').classList.add('has-image');
+      $('prompt').style.display='none';
+      $('analyzeBtn').disabled=false;
+      syncCanvas();
+      log('Image loaded for analysis');
+    };
+    img.src=ev.target.result;
+  };
+  r.readAsDataURL(f);
+};
+
+function syncCanvas(){
+  const img=$('previewImg');
+  const oc=$('overlayCanvas');
+  oc.width=img.clientWidth; oc.height=img.clientHeight;
+}
+window.onresize=syncCanvas;
+
+// Enviar a imagem para o backend Python para extração OCR
+$('analyzeBtn').onclick=async()=>{
+  const btn=$('analyzeBtn');
+  const fileInput = $('fileInput');
+  if(!fileInput.files[0]) return;
+
+  btn.classList.add('loading');
+  btn.disabled=true;
+  $('analyzeTxt').textContent='Processing...';
+  $('progressFill').style.width='50%';
+  log('Sending to Python backend...');
+
+  const formData = new FormData();
+  formData.append('image', fileInput.files[0]);
+
+  try{
+    const response = await fetch('/analyze', {
+        method: 'POST',
+        body: formData
+    });
+    
+    const data = await response.json();
+    if(data.error) throw new Error(data.error);
+
+    // O backend devolve uma lista de palavras detectadas via Tesseract OCR
+    words = data.words;
+    $('progressFill').style.width='100%';
+    log('OCR done — '+words.length+' words detected.','ok');
+    
+    drawBoxes();
+    computeMidi();
+  }catch(err){
+    log('Server error: '+err.message,'err');
+    $('progressFill').style.width='0%';
+  }finally{
+    btn.classList.remove('loading');
+    btn.disabled=false;
+    $('analyzeTxt').textContent='Re-analyse';
+  }
+};
+
+// Desenha retângulos no canvas onde a rede OCR detetou uma determinada palavra
+function drawBoxes(){
+  const img=$('previewImg');
+  const oc=$('overlayCanvas');
+  oc.width=img.clientWidth; oc.height=img.clientHeight;
+  const ctx=oc.getContext('2d');
+  ctx.clearRect(0,0,oc.width,oc.height);
+  ctx.strokeStyle='#e24b4a';
+  ctx.lineWidth=1;
+  
+  words.forEach(w=>{
+    ctx.strokeRect(
+        w.bbox.x0 * (oc.width / img.naturalWidth),
+        w.bbox.y0 * (oc.height / img.naturalHeight),
+        (w.bbox.x1 - w.bbox.x0) * (oc.width / img.naturalWidth),
+        (w.bbox.y1 - w.bbox.y0) * (oc.height / img.naturalHeight)
+    );
+  });
+}
+
+function snapToScale(semitones,scaleName){
+  const s=SCALES[scaleName];
+  const oct=Math.floor(semitones/12);
+  const pc=((semitones%12)+12)%12;
+  let best=s[0],bestD=99;
+  s.forEach(n=>{ const d=Math.abs(n-pc); if(d<bestD){bestD=d;best=n;} });
+  return oct*12+best; 
+}
+
+function computeMidi(){
+  const root=parseInt($('rootSelect').value);
+  const scale=$('scaleSelect').value;
+  const ch=parseInt($('compHeight').value);
+  const th=parseInt($('thickRange').value);
+  $('val-h').textContent=ch;
+  $('val-t').textContent=th;
+
+  notes=words.map(w=>{
+    const raw=60+root-Math.floor(w.y*24);
+    const pitch=snapToScale(raw-60,scale)+60;
+    return{
+      pitch,
+      start:w.x*6,
+      dur:Math.min(1.2,Math.max(0.1,w.h*4)),
+      text:w.text,
+      yRel:w.y,
+      conf:w.conf
+    };
+  });
+
+  drawRoll(ch,th);
+  $('playBtn').disabled=false;
+  $('exportBtn').disabled=false;
+  $('tagsGrid').innerHTML=words.map(w=>`<span class="tag">${w.text}</span>`).join('');
+}
+
+function drawRoll(h,th){
+  const c=$('roll');
+  c.width=c.parentElement.clientWidth;
+  c.height=h;
+  const ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,h);
+
+  ctx.strokeStyle='rgba(128,128,128,0.1)';
+  ctx.lineWidth=0.5;
+  for(let i=0;i<8;i++){
+    const x=(i/8)*c.width;
+    ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();
+  }
+
+  notes.forEach(n=>{
+    const x=(n.start/6)*c.width;
+    const y=n.yRel*h;
+    const w=Math.max((n.dur/6)*c.width,3);
+    // Opacidade consoante fator de confiança do Tesseract OCR
+    const alpha=0.4+0.6*(n.conf/100);
+    ctx.fillStyle=`rgba(0,0,0,${alpha})`;
+    ctx.fillRect(x,y-th/2,w,th);
+    if(th>14){
+      ctx.fillStyle='#fff';
+      ctx.font='bold 9px monospace';
+      ctx.fillText(n.text.toUpperCase(),x+2,y+4);
+    }
+  });
+}
+
+['compHeight','thickRange'].forEach(id=>{
+  $(id).oninput=()=>{ if(words.length)computeMidi(); };
+});
+['rootSelect','scaleSelect'].forEach(id=>{
+  $(id).onchange=()=>{ if(words.length)computeMidi(); };
+});
+
+$('playBtn').onclick=()=>{
+  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
+  const now=actx.currentTime;
+  const wave=$('waveSelect').value;
+  log('Playback started ('+notes.length+' notes)');
+  nodes=[];
+  
+  notes.forEach(n=>{
+    const osc=actx.createOscillator();
+    const g=actx.createGain();
+    osc.type=wave;
+    osc.frequency.value=440*Math.pow(2,(n.pitch-69)/12);
+    
+    g.gain.setValueAtTime(0,now+n.start);
+    g.gain.linearRampToValueAtTime(0.18,now+n.start+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,now+n.start+n.dur);
+    
+    osc.connect(g);g.connect(actx.destination);
+    
+    osc.start(now+n.start);osc.stop(now+n.start+n.dur+0.1); 
+    nodes.push(osc);
+  });
+};
+
+$('stopBtn').onclick=()=>{
+  nodes.forEach(o=>{try{o.stop()}catch(e){}});
+  nodes=[];
+  log('Stopped.');
+};
+
+$('exportBtn').onclick=()=>{
+  const a=document.createElement('a');
+  a.download='composition.png';
+  a.href=$('roll').toDataURL();
+  a.click();
+  log('Exported.','ok');
+};
+</script>
+</body>
+</html>
